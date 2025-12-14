@@ -719,14 +719,11 @@ function GUI.handle_click(event)
         return
     end
 
-    -- GPS 发送
+-- GPS 发送
     if string.find(name, NAMES.btn_gps) then
         if element.tags.gps_string then
-            if game.is_multiplayer() then
-                player.say(element.tags.gps_string) -- 多人游戏直接说话
-            else
-                player.print(element.tags.gps_string) -- 单人游戏打印给自己
-            end
+            -- [修复] 使用 game.print()，它对单人和多人游戏都有效，且保证不报错
+            game.print(element.tags.gps_string)
         end
         return
     end
