@@ -24,31 +24,72 @@ local shortcut = {
 -- 3.1 方尖碑 (Obelisk) - 10x10
 local obelisk = table.deepcopy(data.raw["simple-entity-with-owner"]["simple-entity-with-owner"])
 obelisk.name = NAME_OBELISK
-obelisk.icon = "__base__/graphics/icons/rocket-silo.png"
+obelisk.icon = "__SoulLink__/graphics/entity/icon/111.png" -- 后面记得换成你的 icon
 obelisk.icon_size = 64
 obelisk.flags = { "placeable-neutral", "placeable-player", "player-creation", "not-rotatable" }
 obelisk.minable = { mining_time = 5, result = NAME_OBELISK }
 obelisk.max_health = 5000
-obelisk.collision_box = { { -4.9, -4.9 }, { 4.9, 4.9 } }
+
+-- [核心设定 1] 碰撞箱 (Collision Box)
+-- 设得很小 (4x4)，只挡住中间的水晶根部，让玩家可以走上基座
+obelisk.collision_box = { { -1.9, -1.9 }, { 1.9, 1.9 } }
+
+-- [核心设定 2] 选择箱 (Selection Box)
+-- 设为完整大小 (10x10)，保证玩家鼠标指着基座边缘也能选中它
 obelisk.selection_box = { { -5, -5 }, { 5, 5 } }
+
+-- [核心设定 3] 贴图 (Picture)
 obelisk.picture = {
-    filename = "__base__/graphics/entity/rocket-silo/06-rocket-silo.png",
-    width = 300,
-    height = 300,
-    scale = 1,
+    filename = "__SoulLink__/graphics/entity/11.png", -- 确保文件名正确
+    width = 1024,
+    height = 2048,
+
+    -- [计算结果] 缩放比例：让 1024px 刚好填满 10格
+    scale = 0.3125,
+
+    -- [计算结果] 垂直偏移：把图片向上提 5格，让基座中心对准实体中心
+    -- 负数代表向上移
+    shift = { 0, -5 },
 }
+-- 建议加上 render_layer 保证它很高的时候不会被前面的电线杆错误遮挡（可选）
+obelisk.render_layer = "object"
 
 -- 3.2 中继塔 (Pylon) - 4x4
 local pylon = table.deepcopy(data.raw["simple-entity-with-owner"]["simple-entity-with-owner"])
 pylon.name = NAME_PYLON
-pylon.icon = "__base__/graphics/icons/roboport.png"
-pylon.icon_size = 64
+pylon.icon = "__SoulLink__/graphics/entity/icon/22.png" -- 也可以暂时用实体图做图标，或者你有专门的icon
+pylon.icon_size = 64 -- 注意：如果直接用大图做icon可能需要改这里，建议还是用专门的icon文件
 pylon.flags = { "placeable-neutral", "placeable-player", "player-creation" }
 pylon.minable = { mining_time = 1, result = NAME_PYLON }
 pylon.max_health = 500
+
+-- [碰撞/选择箱] 设定为标准的 4x4
 pylon.collision_box = { { -1.9, -1.9 }, { 1.9, 1.9 } }
 pylon.selection_box = { { -2, -2 }, { 2, 2 } }
-pylon.picture = data.raw["roboport"]["roboport"].base
+
+-- [关键] 贴图定义 (包含本体和阴影)
+pylon.picture = {
+    layers = {
+        -- 层1：本体
+        {
+            filename = "__SoulLink__/graphics/entity/22.png",
+            width = 1344,
+            height = 768,
+            scale = 0.25, -- [计算结果] 1/4 缩放
+            shift = { -0.05, -0.89 }, -- [计算结果] 基于基座中心对齐
+        },
+        -- 层2：阴影
+        {
+            filename = "__SoulLink__/graphics/entity/22shadow.png",
+            width = 1344,
+            height = 768,
+            scale = 0.25,
+            shift = { -0.05, -0.89 }, -- 阴影通常和本体使用相同的偏移，除非原图阴影位置很偏
+            draw_as_shadow = true, -- [关键] 标记为阴影，半透明渲染
+            opacity = 0.7, -- 可以微调阴影浓度
+        },
+    },
+}
 
 -- 4. 物品定义
 local item_obelisk = {
