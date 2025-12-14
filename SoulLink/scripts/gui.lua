@@ -40,6 +40,14 @@ local NAMES = {
     btn_gps = "soullink_gps_", -- [新增] GPS 按钮
     btn_teleport = "soullink_tp_",
     btn_fold = "soullink_fold_", -- [新增] 折叠按钮
+
+    -- [保留] 之前讨论的排序抓手 (如果你之前删了，请加回来)
+    btn_move_anchor = "soullink_mv_anc_",
+    btn_move_surface = "soullink_mv_srf_",
+
+    nav_scroll = "soullink_nav_scroll", -- 左侧导航栏容器名
+    btn_nav_item = "soullink_nav_item_", -- 导航按钮前缀
+    btn_nav_tp = "soullink_nav_tp_", -- 导航传送按钮前缀
 }
 
 -- ============================================================================
@@ -95,6 +103,94 @@ local function update_detail_pane(frame, anchor_id)
     end
 end
 
+--- [新增] 更新左侧导航栏
+local function update_nav_pane(frame, player, p_data)
+    local scroll = find_element_by_name(frame, NAMES.nav_scroll)
+    if not scroll then
+        return
+    end
+    scroll.clear()
+
+    local ROW_HEIGHT = 28
+    if not p_data.selected_nav then
+        p_data.selected_nav = player.surface.index
+    end
+
+    -- 辅助函数
+    local function add_nav_row(id, caption, is_special, surface_index_for_tp)
+        local is_selected = (p_data.selected_nav == id)
+
+        local flow = scroll.add({ type = "flow", direction = "horizontal" })
+        flow.style.vertical_align = "center"
+        flow.style.bottom_margin = 0
+
+        -- 左侧按钮
+        local btn = flow.add({
+            type = "button",
+            name = NAMES.btn_nav_item .. tostring(id),
+            caption = caption,
+            style = "list_box_item",
+            tags = { nav_id = id }, -- id 可能是数字或字符串
+            mouse_button_filter = { "left" },
+        })
+
+        -- 样式修正
+        btn.style.height = ROW_HEIGHT
+        btn.style.horizontally_stretchable = true
+        btn.style.horizontal_align = "left"
+        btn.style.font = "default-bold"
+
+        if is_selected then
+            btn.style.font_color = { 1, 1, 0 } -- 选中变黄
+        else
+            btn.style.font_color = { 0.8, 0.8, 0.8 }
+        end
+
+        -- 右侧传送按钮 (主塔)
+        if surface_index_for_tp then
+            local anchors = State.get_list_by_surface(surface_index_for_tp)
+            local main_anchor = nil
+            for _, a in pairs(anchors) do
+                if a.type == "soullink-obelisk" then
+                    main_anchor = a
+                    break
+                end
+            end
+
+            if main_anchor then
+                flow.add({
+                    type = "sprite-button",
+                    name = NAMES.btn_nav_tp .. main_anchor.id, -- 唯一名字
+                    sprite = "soullink-icon-teleport",
+                    style = "frame_action_button",
+                    style_mods = { width = 24, height = 24, margin = 0 },
+                    tooltip = "传送至主塔",
+                    tags = { anchor_id = main_anchor.id }, -- [关键] 必须存这个 tag
+                })
+            else
+                flow.add({ type = "empty-widget", style_mods = { width = 24 } })
+            end
+        end
+    end
+
+    -- 1. 特殊分类 (补回收藏夹)
+    add_nav_row("__all__", "🌍 所有网络", true)
+    add_nav_row("__fav__", "★ 特别关注", true) -- [修复] 加回收藏夹
+
+    -- 2. 地表列表
+    local active_surfaces = State.get_active_surfaces()
+    local s_idxs = {}
+    for k in pairs(active_surfaces) do
+        table.insert(s_idxs, k)
+    end
+    table.sort(s_idxs)
+
+    for _, s_idx in ipairs(s_idxs) do
+        local s_name = game.surfaces[s_idx] and game.surfaces[s_idx].name or ("Surface #" .. s_idx)
+        add_nav_row(s_idx, s_name, false, s_idx)
+    end
+end
+
 -- [重写] 添加表格行 (原生工具栏风格: 20px)
 local function add_table_row(table_elem, anchor, player_data)
     local ROW_SIZE = 28
@@ -105,6 +201,20 @@ local function add_table_row(table_elem, anchor, player_data)
 
     -- 名字栏样式：保持深色背景，但压扁高度
     local name_mods = { height = ROW_SIZE, top_padding = 0, bottom_padding = 0, margin = 0 }
+
+    -- [新增] 第0列：排序抓手 (用字符模拟)
+    local is_moving = (player_data.moving_anchor_id == anchor.id)
+    local move_style = is_moving and "flib_selected_frame_action_button" or "frame_action_button"
+
+    table_elem.add({
+        type = "button", -- 改用 button
+        name = NAMES.btn_move_anchor .. anchor.id,
+        caption = "::", -- 字符模拟
+        style = move_style,
+        style_mods = { width = 24, height = ROW_SIZE, padding = 0, margin = 0, font = "default-bold" },
+        tags = { anchor_id = anchor.id, surface_index = anchor.surface_index },
+        tooltip = "点击排序",
+    })
 
     -- 1. 第一列：收藏按钮 (Star)
     local is_fav = player_data.favorites and player_data.favorites[anchor.id]
@@ -212,43 +322,60 @@ local function add_table_row(table_elem, anchor, player_data)
     })
 end
 local function update_list_view(frame, player)
+    local p_data = State.get_player_data(player.index)
+
+    update_nav_pane(frame, player, p_data)
+
     local scroll = find_element_by_name(frame, NAMES.left_scroll)
     if not scroll then
         return
     end
     scroll.clear()
 
-    local player_data = State.get_player_data(player.index)
-    local all_anchors = State.get_all()
-
-    -- 搜索逻辑 (不变)
+    -- 获取搜索文本
     local search_text = ""
     local titlebar = find_element_by_name(frame, NAMES.titlebar)
     if titlebar and titlebar[NAMES.search_textfield] then
         search_text = string.lower(titlebar[NAMES.search_textfield].text)
     end
 
-    local favorites_list = {}
+    -- [修复] 逻辑状态判定
+    local is_search_mode = (search_text ~= "")
+    local nav_selection = p_data.selected_nav -- 可能是 "__all__", "__fav__", 或 surface_index (数字)
+
+    local all_anchors = State.get_all()
     local grouped_data = {}
-    local has_any = false
 
     for _, anchor in pairs(all_anchors) do
-        local match = true
-        if search_text ~= "" then
-            match = false
+        local keep = false
+
+        -- 1. 搜索模式 (优先级最高：忽略左侧选择，搜全局)
+        if is_search_mode then
             if type(anchor.name) == "string" and string.find(string.lower(anchor.name), search_text, 1, true) then
-                match = true
+                keep = true
             end
-            if type(anchor.name) == "table" and string.find(tostring(anchor.id), search_text, 1, true) then
-                match = true
+
+        -- 2. 收藏模式
+        elseif nav_selection == "__fav__" then
+            if p_data.favorites and p_data.favorites[anchor.id] then
+                keep = true
+            end
+
+        -- 3. 所有网络模式
+        elseif nav_selection == "__all__" then
+            keep = true
+
+        -- 4. 具体地表模式 (数字)
+        elseif type(nav_selection) == "number" then
+            if anchor.surface_index == nav_selection then
+                -- [关键] 在单地表模式下，隐藏主建筑 (soullink-obelisk)
+                if anchor.type ~= "soullink-obelisk" then
+                    keep = true
+                end
             end
         end
 
-        if match then
-            has_any = true
-            if player_data.favorites and player_data.favorites[anchor.id] then
-                table.insert(favorites_list, anchor)
-            end
+        if keep then
             local s_idx = anchor.surface_index
             if not grouped_data[s_idx] then
                 local s_name = game.surfaces[s_idx] and game.surfaces[s_idx].name or ("Surface #" .. s_idx)
@@ -258,107 +385,54 @@ local function update_list_view(frame, player)
         end
     end
 
-    if not has_any then
-        scroll.add({ type = "label", caption = { "gui.soullink-no-anchors" }, style_mods = { font_color = { 0.5, 0.5, 0.5 } } })
-        return
-    end
-
-    -- 渲染 A：特别关注
-    if #favorites_list > 0 then
-        local fav_frame = scroll.add({
-            type = "frame",
-            style = "inside_shallow_frame",
-            direction = "vertical",
-        })
-        fav_frame.style.horizontally_stretchable = true
-        fav_frame.style.bottom_margin = 8
-
-        local header = fav_frame.add({ type = "flow", direction = "horizontal" })
-        header.style.vertical_align = "center"
-        header.style.bottom_margin = 4
-        header.add({ type = "sprite", sprite = "soullink-icon-star", style_mods = { width = 20, height = 20, stretch_image_to_widget_size = true } })
-        header.add({ type = "label", caption = { "gui.soullink-favorites" }, style = "caption_label" })
-
-        local fav_table = fav_frame.add({
-            type = "table",
-            column_count = 5,
-            style = "table", -- [重要] 改用基础表格样式，消除缝隙
-        })
-        fav_table.style.horizontally_stretchable = true
-        fav_table.style.horizontal_spacing = 0
-        fav_table.style.vertical_spacing = 0 -- 消除行间距，如果不喜欢连太紧，可以改回 1
-        fav_table.style.column_alignments[2] = "left"
-
-        table.sort(favorites_list, function(a, b)
-            return a.id < b.id
-        end)
-        for _, anchor in ipairs(favorites_list) do
-            add_table_row(fav_table, anchor, player_data)
-        end
-    end
-
-    -- 渲染 B：地表分组
+    -- 渲染部分 (基本不变，但要注意分组标题的显示逻辑)
     local s_idxs = {}
     for k in pairs(grouped_data) do
         table.insert(s_idxs, k)
     end
     table.sort(s_idxs)
 
+    if #s_idxs == 0 then
+        scroll.add({ type = "label", caption = { "gui.soullink-no-anchors" }, style_mods = { font_color = { 0.5, 0.5, 0.5 } } })
+        return
+    end
+
     for _, s_idx in ipairs(s_idxs) do
         local group = grouped_data[s_idx]
 
-        local group_frame = scroll.add({
-            type = "frame",
-            style = "inside_shallow_frame",
-            direction = "vertical",
-        })
-        group_frame.style.horizontally_stretchable = true
-        group_frame.style.bottom_margin = 8
+        -- 什么时候显示地表标题？
+        -- 答：搜索模式、收藏模式、所有网络模式。
+        -- 只有在“单地表模式”下，才不需要标题。
+        local show_header = (type(nav_selection) ~= "number") or is_search_mode
 
-        local header = group_frame.add({ type = "flow", direction = "horizontal" })
-        header.style.vertical_align = "center"
-        header.style.bottom_margin = 4
+        local table_container = scroll
 
-        local is_collapsed = player_data.collapsed_surfaces and player_data.collapsed_surfaces[s_idx]
-        if search_text ~= "" then
-            is_collapsed = false
+        if show_header then
+            local group_frame = scroll.add({ type = "frame", style = "inside_shallow_frame", direction = "vertical" })
+            group_frame.style.horizontally_stretchable = true
+            group_frame.style.bottom_margin = 8
+
+            local header = group_frame.add({ type = "flow", direction = "horizontal" })
+            header.style.vertical_align = "center"
+            header.add({ type = "label", caption = group.name, style = "caption_label" }).style.font = "default-bold"
+            table_container = group_frame
         end
 
-        local sprite = is_collapsed and "utility/play" or "utility/dropdown"
-        header.add({
-            type = "sprite-button",
-            name = NAMES.btn_fold,
-            sprite = sprite,
-            style = "frame_action_button", -- 这个样式和下面列表里的按钮一致了
-            style_mods = { width = 20, height = 20, padding = 0 },
-            tags = { surface_index = s_idx },
-            tooltip = is_collapsed and "展开" or "折叠",
+        local list_table = table_container.add({
+            type = "table",
+            column_count = 6,
+            style = "table",
         })
+        list_table.style.horizontally_stretchable = true
+        list_table.style.horizontal_spacing = 0
+        list_table.style.vertical_spacing = 0
 
-        header.add({
-            type = "label",
-            caption = group.name,
-            style = "caption_label",
-        }).style.font = "default-bold"
+        table.sort(group.anchors, function(a, b)
+            return a.id < b.id
+        end)
 
-        if not is_collapsed then
-            local group_table = group_frame.add({
-                type = "table",
-                column_count = 5,
-                style = "table", -- [重要] 改用基础表格样式
-            })
-            group_table.style.horizontally_stretchable = true
-            group_table.style.horizontal_spacing = 0
-            group_table.style.vertical_spacing = 0
-            group_table.style.column_alignments[2] = "left"
-
-            table.sort(group.anchors, function(a, b)
-                return a.id < b.id
-            end)
-
-            for _, anchor in ipairs(group.anchors) do
-                add_table_row(group_table, anchor, player_data)
-            end
+        for _, anchor in ipairs(group.anchors) do
+            add_table_row(list_table, anchor, p_data)
         end
     end
 end
@@ -372,98 +446,111 @@ function GUI.toggle_main_window(player)
     if frame then
         GUI.close_window(player)
     else
-        -- 创建新窗口 (V9 逻辑：直接在这里创建)
+        -- 1. 创建主窗口
         frame = player.gui.screen.add({ type = "frame", name = NAMES.frame, direction = "vertical" })
+        frame.auto_center = true -- 居中
 
-        -- 标题栏
+        -- 2. 标题栏 (代码保持不变，含搜索、固定、关闭等)
         local titlebar = frame.add({ type = "flow", name = NAMES.titlebar, direction = "horizontal", style = "flib_titlebar_flow" })
         titlebar.drag_target = frame
         titlebar.add({ type = "label", style = "frame_title", caption = { "gui-title.soullink-main" }, ignored_by_interaction = true })
         titlebar.add({ type = "empty-widget", style = "flib_titlebar_drag_handle", ignored_by_interaction = true })
 
-        -- [新增] 获取状态
         local p_data = State.get_player_data(player.index)
 
-        -- [新增] 搜索框 (位置：搜索按钮左侧)
+        -- 搜索框逻辑 (保持不变)
         local search_visible = p_data.show_search == true
-        local search_field = titlebar.add({
-            type = "textfield",
-            name = NAMES.search_textfield,
-            visible = search_visible, -- 根据状态显示
-            style_mods = { width = 100, top_margin = -2 }, -- 微调样式对齐
-        })
+        titlebar.add({ type = "textfield", name = NAMES.search_textfield, visible = search_visible, style_mods = { width = 100, top_margin = -2 } })
+        titlebar.add({ type = "sprite-button", name = NAMES.search_btn, style = "frame_action_button", sprite = "soullink-icon-search", tooltip = "搜索" })
 
-        -- [新增] 搜索按钮
-        titlebar.add({
-            type = "sprite-button",
-            name = NAMES.search_btn,
-            style = "frame_action_button", -- 保持一致风格
-            sprite = "soullink-icon-search",
-            tooltip = "搜索", -- 建议加上本地化 key
-        })
-
-        -- [新增] 固定按钮
+        -- 固定按钮 (保持不变)
         local pin_style = p_data.is_pinned and "flib_selected_frame_action_button" or "frame_action_button"
-        titlebar.add({
-            type = "sprite-button",
-            name = NAMES.pin_btn,
-            style = pin_style,
-            sprite = "soullink-icon-pin",
-            tooltip = "固定窗口",
-        })
-
-        -- 原有的关闭按钮
-
+        titlebar.add({ type = "sprite-button", name = NAMES.pin_btn, style = pin_style, sprite = "soullink-icon-pin", tooltip = "固定窗口" })
         titlebar.add({ type = "sprite-button", name = NAMES.close_btn, style = "frame_action_button", sprite = "utility/close" })
 
-        -- 主体
+        -- ====================================================================
+        -- 3. 主体内容 (三栏布局) - [修改版]
+        -- ====================================================================
         local body = frame.add({ type = "flow", direction = "horizontal" })
+        body.style.horizontal_spacing = 8
+        -- [关键] 让 body 也能纵向拉伸，填满 frame
+        body.style.vertically_stretchable = true
 
-        -- 左侧
-        local left = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical", style_mods = { padding = 4 } })
-        local scroll = left.add({
+        -- [栏 1] 左侧导航
+        local nav_frame = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
+        nav_frame.style.padding = 0
+        nav_frame.style.vertically_stretchable = true -- [修复] 纵向拉伸
+
+        local nav_scroll = nav_frame.add({
+            type = "scroll-pane",
+            name = NAMES.nav_scroll,
+            style = "flib_naked_scroll_pane",
+            horizontal_scroll_policy = "never",
+            vertical_scroll_policy = "auto",
+        })
+        nav_scroll.style.minimal_width = 160
+        nav_scroll.style.maximal_width = 160
+        -- nav_scroll.style.vertically_stretchable = true -- [修复] 纵向拉伸 (去掉 minimal_height)
+        -- [修改] 将最大高度设为 800
+        nav_scroll.style.maximal_height = 800
+
+        -- [栏 2] 中间列表
+        local list_frame = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
+        list_frame.style.padding = 4
+        list_frame.style.vertically_stretchable = true -- [修复] 纵向拉伸
+
+        local list_scroll = list_frame.add({
             type = "scroll-pane",
             name = NAMES.left_scroll,
             style = "flib_naked_scroll_pane",
             horizontal_scroll_policy = "never",
         })
-        scroll.style.minimal_width = 350
-        scroll.style.minimal_height = 400
-        scroll.style.maximal_height = 800
+        list_scroll.style.minimal_width = 350
+        -- list_scroll.style.vertically_stretchable = true -- [修复] 纵向拉伸
+        -- list_scroll.style.minimal_height = 400 -- [删除] 这一行
+        -- [修改] 将最大高度设为 800 (如果有 maximal_height = 600 就改掉，没有就加上)
+        list_scroll.style.maximal_height = 800
 
-        -- 右侧 (修正：纯监控布局)
-        -- 去掉 style_mods，手动设置样式
-        local right = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
-        right.style.padding = 0
-        right.style.left_margin = 5
+        -- [栏 3] 右侧监控
+        local cam_frame = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
+        cam_frame.style.padding = 0
+        cam_frame.style.vertically_stretchable = true -- [修复] 纵向拉伸
 
-        -- 摄像头
-        local camera = right.add({
+        local camera = cam_frame.add({
             type = "camera",
             name = NAMES.camera,
             position = { 0, 0 },
             surface_index = 1,
             zoom = 0.2,
         })
-
-        -- [关键修复] 手动设置样式属性，确保摄像头有大小且能拉伸
         camera.style.minimal_width = 300
-        camera.style.minimal_height = 200
+        camera.style.minimal_height = 300
         camera.style.vertically_stretchable = true
         camera.style.horizontally_stretchable = true
-
-        -- [已删除] 移除了 info_flow 的创建
-
-        -- [修复] 启用持续自动居中属性
-        -- 这样当列表展开/折叠导致窗口高度变化时，它会始终保持在屏幕中间
-        frame.auto_center = true
+        -- [建议新增] 给摄像头也加上最大高度限制，防止它单独把窗口撑得太高
+        camera.style.maximal_height = 800
 
         player.opened = frame
-
-        local p_data = State.get_player_data(player.index)
         p_data.is_gui_open = true
 
+        -- 初始化：如果没有选中的导航，默认选中当前星球
+        if not p_data.selected_nav then
+            p_data.selected_nav = player.surface.index
+        end
+
         update_list_view(frame, player)
+
+        -- 初始打开时，如果选中的是星球，让摄像头对准主塔
+        if type(p_data.selected_nav) == "number" then
+            local anchors = State.get_list_by_surface(p_data.selected_nav)
+            for _, a in pairs(anchors) do
+                if a.type == "soullink-obelisk" then
+                    camera.position = a.position
+                    camera.surface_index = a.surface_index
+                    break
+                end
+            end
+        end
     end
 end
 
@@ -492,9 +579,12 @@ function GUI.handle_click(event)
     local player = game.get_player(event.player_index)
     local frame = player.gui.screen[NAMES.frame]
 
-    -- [关键修复] 把这一行提到这里！
-    -- 这样下面的所有按钮逻辑（搜索、固定、关闭等）都能使用 p_data
+    -- 获取玩家数据
     local p_data = State.get_player_data(player.index)
+
+    -- ============================================================
+    -- 1. 全局/标题栏按钮
+    -- ============================================================
 
     -- 全局关闭
     if name == NAMES.close_btn then
@@ -502,47 +592,26 @@ function GUI.handle_click(event)
         return
     end
 
-    -- [新增] 固定按钮逻辑
+    -- 固定按钮
     if name == NAMES.pin_btn then
         if not p_data.is_pinned then
             p_data.is_pinned = false
         end
         p_data.is_pinned = not p_data.is_pinned
-
         element.style = p_data.is_pinned and "flib_selected_frame_action_button" or "frame_action_button"
         return
     end
 
-    -- [新增] 折叠/展开地表
-    if name == NAMES.btn_fold then
-        local s_idx = element.tags.surface_index
-        if not p_data.collapsed_surfaces then
-            p_data.collapsed_surfaces = {}
-        end
-
-        -- 切换状态
-        p_data.collapsed_surfaces[s_idx] = not p_data.collapsed_surfaces[s_idx]
-
-        -- 刷新
-        update_list_view(frame, player)
-        return
-    end
-
-    -- [新增] 搜索按钮逻辑
+    -- 搜索按钮
     if name == NAMES.search_btn then
-        -- 切换状态
         if p_data.show_search == nil then
             p_data.show_search = false
-        end -- 增加一个初始化保护
+        end
         p_data.show_search = not p_data.show_search
 
-        -- 切换输入框可见性
-        -- element.parent 就是 titlebar
         local titlebar = element.parent
         if titlebar[NAMES.search_textfield] then
             titlebar[NAMES.search_textfield].visible = p_data.show_search
-
-            -- 如果是关闭搜索，清空内容并刷新
             if not p_data.show_search then
                 titlebar[NAMES.search_textfield].text = ""
                 update_list_view(frame, player)
@@ -551,24 +620,97 @@ function GUI.handle_click(event)
         return
     end
 
-    -- [修改] 改名确认：使用 string.find
-    if string.find(name, NAMES.rename_confirm) then
-        -- 注意：因为现在 textfield 的名字也带ID了，所以获取兄弟元素要小心
-        -- 既然我们已经在 tags 里存了 ID，我们可以直接去 Table 里找
-        -- 但最简单的方法是：触发 handle_confirm，我们稍后处理回车逻辑
-        -- 这里我们利用 textfield 的名字规律
+    -- ============================================================
+    -- 2. [新增] 左侧导航栏逻辑 (三栏布局核心)
+    -- ============================================================
+
+    -- 逻辑 A: 点击导航项 (切换视图)
+    if string.find(name, NAMES.btn_nav_item) then
+        -- 获取存在 tags 里的导航 ID (可能是数字也可能是字符串 "__all__")
+        local nav_id = element.tags.nav_id
+
+        -- 更新选中状态
+        p_data.selected_nav = nav_id
+
+        -- 刷新界面 (让中间列表变化)
+        update_list_view(frame, player)
+
+        -- [联动] 如果选中的是具体星球，让右侧摄像头自动对准该星球的主塔
+        if type(nav_id) == "number" then
+            local anchors = State.get_list_by_surface(nav_id)
+            -- 寻找主塔
+            for _, a in pairs(anchors) do
+                if a.type == "soullink-obelisk" then
+                    -- 找到摄像头控件
+                    local cam = find_element_by_name(frame, NAMES.camera)
+                    if cam then
+                        cam.position = a.position
+                        cam.surface_index = a.surface_index
+                        cam.zoom = 0.2
+                    end
+                    break
+                end
+            end
+        end
+        return
+    end
+
+    -- 逻辑 B: 点击导航栏上的传送按钮
+    if string.find(name, NAMES.btn_nav_tp) then
         local anchor_id = element.tags.anchor_id
-        -- 找到那个特定的 textfield
+        if anchor_id then
+            local anchor = State.get_by_id(anchor_id)
+            -- [修改] 安全传送逻辑
+            if anchor and anchor.entity and anchor.entity.valid then
+                local surface = anchor.entity.surface
+                local center = anchor.entity.position
+
+                -- 参数说明: "character"=玩家碰撞盒, center=搜索中心, 10=搜索半径, 1=精度
+                -- 这会自动跳过建筑本身的碰撞体积，找到最近的空地
+                local safe_pos = surface.find_non_colliding_position("character", center, 10, 1)
+
+                if safe_pos then
+                    player.teleport(safe_pos, anchor.surface_index)
+                else
+                    -- 极少数情况找不到空地，才传送到中心
+                    player.teleport(center, anchor.surface_index)
+                end
+
+                if not p_data.is_pinned then
+                    GUI.close_window(player)
+                end
+            else
+                player.print({ "gui.soullink-anchor-not-found" })
+            end
+        end
+        return
+    end
+
+    -- ============================================================
+    -- 3. 中间列表逻辑
+    -- ============================================================
+
+    -- 如果主窗口不存在，后续逻辑无法执行
+    if not frame then
+        return
+    end
+
+    -- 折叠/展开地表 (在"所有网络"模式下使用)
+    if name == NAMES.btn_fold then
+        local s_idx = element.tags.surface_index
+        if not p_data.collapsed_surfaces then
+            p_data.collapsed_surfaces = {}
+        end
+        p_data.collapsed_surfaces[s_idx] = not p_data.collapsed_surfaces[s_idx]
+        update_list_view(frame, player)
+        return
+    end
+
+    -- 改名确认 (钩子按钮)
+    if string.find(name, NAMES.rename_confirm) then
+        local anchor_id = element.tags.anchor_id
         local textfield_name = NAMES.rename_textfield .. anchor_id
-
-        -- element.parent 是那个 flow，textfield 在 element.parent.parent (table) 里
-        -- 这样找太麻烦。我们直接利用 element.tags.anchor_id
-        -- 更好的办法是：遍历 parent.parent.children 找到那个名字。
-
-        -- 但是，实际上 Factorio 的 textfield 改动不需要点击确认，回车就行。
-        -- 如果非要点钩子，我们需要找到那个输入框的文本。
-        -- 简单方案：从 element.parent (flow) 往上找 table，再找 textfield
-        local table_elem = element.parent.parent
+        local table_elem = element.parent -- [修复] 按钮的直接父级就是 table
         if table_elem[textfield_name] then
             State.set_anchor_name(anchor_id, table_elem[textfield_name].text)
             p_data.editing_anchor_id = nil
@@ -577,24 +719,33 @@ function GUI.handle_click(event)
         return
     end
 
-    -- 以下操作需要主窗口存在
-    if not frame then
-        return
-    end
-
-    -- [修改] GPS 按钮：使用 string.find
+    -- GPS 发送
     if string.find(name, NAMES.btn_gps) then
         if element.tags.gps_string then
-            player.print(element.tags.gps_string)
+            if game.is_multiplayer() then
+                player.say(element.tags.gps_string) -- 多人游戏直接说话
+            else
+                player.print(element.tags.gps_string) -- 单人游戏打印给自己
+            end
         end
         return
     end
 
-    -- [修改] 传送按钮：使用 string.find
+    -- 列表项传送
     if string.find(name, NAMES.btn_teleport) then
         local anchor = State.get_by_id(element.tags.anchor_id)
-        if anchor then
-            player.teleport(anchor.position, anchor.surface_index)
+        -- [修改] 安全传送逻辑 (同上)
+        if anchor and anchor.entity and anchor.entity.valid then
+            local surface = anchor.entity.surface
+            local center = anchor.entity.position
+            local safe_pos = surface.find_non_colliding_position("character", center, 10, 1)
+
+            if safe_pos then
+                player.teleport(safe_pos, anchor.surface_index)
+            else
+                player.teleport(center, anchor.surface_index)
+            end
+
             if not p_data.is_pinned then
                 GUI.close_window(player)
             end
@@ -602,25 +753,13 @@ function GUI.handle_click(event)
         return
     end
 
-    -- 选中预览
+    -- 列表项选中 (更新摄像头)
     if string.find(name, NAMES.btn_select) then
         update_detail_pane(frame, element.tags.anchor_id)
         return
     end
 
-    -- 折叠/展开
-    if string.find(name, NAMES.btn_expand) then
-        local s_idx = element.tags.surface_index
-        local p_data = State.get_player_data(player.index)
-        if not p_data.expanded_surfaces then
-            p_data.expanded_surfaces = {}
-        end
-        p_data.expanded_surfaces[s_idx] = not p_data.expanded_surfaces[s_idx]
-        update_list_view(frame, player)
-        return
-    end
-
-    -- [修改] 收藏按钮：使用 string.find
+    -- 收藏按钮
     if string.find(name, NAMES.btn_fav) then
         local id = element.tags.anchor_id
         if not p_data.favorites then
@@ -631,7 +770,7 @@ function GUI.handle_click(event)
         return
     end
 
-    -- [修改] 改名按钮：使用 string.find
+    -- 改名按钮 (进入编辑模式)
     if string.find(name, NAMES.btn_edit) then
         p_data.editing_anchor_id = element.tags.anchor_id
         update_list_view(frame, player)

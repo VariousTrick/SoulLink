@@ -141,4 +141,12 @@ data:extend({
     { type = "sprite", name = "soullink-icon-star", filename = "__SoulLink__/graphics/icon/star.png", width = 200, height = 200, scale = 0.16 },
     { type = "sprite", name = "soullink-icon-notstar", filename = "__SoulLink__/graphics/icon/notstar.png", width = 200, height = 200, scale = 0.16 },
     { type = "sprite", name = "soullink-icon-rename", filename = "__SoulLink__/graphics/icon/rename.png", width = 200, height = 200, scale = 0.16 },
+
+    -- [新增] 快捷键定义
+    {
+        type = "custom-input",
+        name = "soullink-toggle-gui", -- 内部事件名
+        key_sequence = "ALT + W", -- 默认键位
+        consuming = "none", -- 允许按键穿透，这是合法值
+    },
 })

@@ -35,6 +35,14 @@ script.on_event(defines.events.on_lua_shortcut, function(event)
     end
 end)
 
+-- [新增] 监听自定义快捷键
+script.on_event("soullink-toggle-gui", function(event)
+    local player = game.get_player(event.player_index)
+    if player then
+        GUI.toggle_main_window(player)
+    end
+end)
+
 -- [GUI 点击] 转发给 GUI 模块处理
 script.on_event(defines.events.on_gui_click, GUI.handle_click)
 
