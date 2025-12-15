@@ -111,6 +111,12 @@ local function update_nav_pane(frame, player, p_data)
     end
     scroll.clear()
 
+    -- [关键修改] 创建一个内部容器来消除间距
+    local inner_flow = scroll.add({ type = "flow", direction = "vertical" })
+    inner_flow.style.vertical_spacing = 0 -- 消除元素间的缝隙
+    inner_flow.style.horizontally_stretchable = true
+    -- inner_flow.style.vertically_stretchable = true -- 可选，如果需要让flow填满高度
+
     local ROW_HEIGHT = 28
     if not p_data.selected_nav then
         p_data.selected_nav = player.surface.index
@@ -120,9 +126,12 @@ local function update_nav_pane(frame, player, p_data)
     local function add_nav_row(id, caption, is_special, surface_index_for_tp)
         local is_selected = (p_data.selected_nav == id)
 
-        local flow = scroll.add({ type = "flow", direction = "horizontal" })
+        -- [修改] 改为添加到 inner_flow 中
+        local flow = inner_flow.add({ type = "flow", direction = "horizontal" })
         flow.style.vertical_align = "center"
         flow.style.bottom_margin = 0
+        -- [关键] 让 flow 水平拉伸，确保按钮填满宽度
+        flow.style.horizontally_stretchable = true
 
         -- 左侧按钮
         local btn = flow.add({
@@ -132,6 +141,8 @@ local function update_nav_pane(frame, player, p_data)
             style = "list_box_item",
             tags = { nav_id = id }, -- id 可能是数字或字符串
             mouse_button_filter = { "left" },
+            -- [修复] 启用 toggled 属性，实现持久高亮
+            toggled = is_selected,
         })
 
         -- 样式修正
@@ -140,8 +151,9 @@ local function update_nav_pane(frame, player, p_data)
         btn.style.horizontal_align = "left"
         btn.style.font = "default-bold"
 
+        -- [修复] 颜色调整
         if is_selected then
-            btn.style.font_color = { 1, 1, 0 } -- 选中变黄
+            btn.style.font_color = { 0, 0, 0 }
         else
             btn.style.font_color = { 0.8, 0.8, 0.8 }
         end
@@ -160,12 +172,12 @@ local function update_nav_pane(frame, player, p_data)
             if main_anchor then
                 flow.add({
                     type = "sprite-button",
-                    name = NAMES.btn_nav_tp .. main_anchor.id, -- 唯一名字
+                    name = NAMES.btn_nav_tp .. main_anchor.id,
                     sprite = "aetherlink-icon-teleport",
                     style = "frame_action_button",
                     style_mods = { width = 24, height = 24, margin = 0 },
-                    tooltip = "传送至主塔",
-                    tags = { anchor_id = main_anchor.id }, -- [关键] 必须存这个 tag
+                    tooltip = { "gui.aetherlink-tooltip-teleport-main" },
+                    tags = { anchor_id = main_anchor.id },
                 })
             else
                 flow.add({ type = "empty-widget", style_mods = { width = 24 } })
@@ -173,9 +185,9 @@ local function update_nav_pane(frame, player, p_data)
         end
     end
 
-    -- 1. 特殊分类 (补回收藏夹)
-    add_nav_row("__all__", "🌍 所有网络", true)
-    add_nav_row("__fav__", "★ 特别关注", true) -- [修复] 加回收藏夹
+    -- 1. 特殊分类
+    add_nav_row("__all__", { "gui.aetherlink-nav-all" }, true)
+    add_nav_row("__fav__", { "gui.aetherlink-nav-favorites" }, true)
 
     -- 2. 地表列表
     local active_surfaces = State.get_active_surfaces()
@@ -213,7 +225,7 @@ local function add_table_row(table_elem, anchor, player_data)
         style = move_style,
         style_mods = { width = 24, height = ROW_SIZE, padding = 0, margin = 0, font = "default-bold" },
         tags = { anchor_id = anchor.id, surface_index = anchor.surface_index },
-        tooltip = "点击排序",
+        tooltip = { "gui.aetherlink-tooltip-sort" },
     })
 
     -- 1. 第一列：收藏按钮 (Star)
@@ -227,7 +239,7 @@ local function add_table_row(table_elem, anchor, player_data)
         style = icon_style, -- [修改] 使用原生小按钮样式
         style_mods = icon_mods,
         tags = { anchor_id = anchor.id },
-        tooltip = is_fav and { "gui.aetherlink-unfavorite" } or { "gui.aetherlink-favorite" },
+        tooltip = is_fav and { "gui.aetherlink-tooltip-unfavorite" } or { "gui.aetherlink-tooltip-favorite" },
     })
 
     -- 2. 第二列：名字 (Name)
@@ -279,7 +291,7 @@ local function add_table_row(table_elem, anchor, player_data)
             style = icon_style, -- [修改] 原生小按钮
             style_mods = icon_mods,
             tags = { anchor_id = anchor.id },
-            tooltip = "确认改名",
+            tooltip = { "gui.aetherlink-confirm-rename" },
         })
     else
         table_elem.add({
@@ -307,7 +319,7 @@ local function add_table_row(table_elem, anchor, player_data)
         style = icon_style, -- [修改] 原生小按钮
         style_mods = icon_mods,
         tags = { gps_string = gps_tag },
-        tooltip = "发送位置",
+        tooltip = { "gui.aetherlink-tooltip-gps" },
     })
 
     -- 5. 第五列：传送
@@ -339,36 +351,27 @@ local function update_list_view(frame, player)
         search_text = string.lower(titlebar[NAMES.search_textfield].text)
     end
 
-    -- [修复] 逻辑状态判定
     local is_search_mode = (search_text ~= "")
-    local nav_selection = p_data.selected_nav -- 可能是 "__all__", "__fav__", 或 surface_index (数字)
+    local nav_selection = p_data.selected_nav
 
     local all_anchors = State.get_all()
     local grouped_data = {}
 
+    -- 数据筛选逻辑 (保持不变)
     for _, anchor in pairs(all_anchors) do
         local keep = false
-
-        -- 1. 搜索模式 (优先级最高：忽略左侧选择，搜全局)
         if is_search_mode then
             if type(anchor.name) == "string" and string.find(string.lower(anchor.name), search_text, 1, true) then
                 keep = true
             end
-
-        -- 2. 收藏模式
         elseif nav_selection == "__fav__" then
             if p_data.favorites and p_data.favorites[anchor.id] then
                 keep = true
             end
-
-        -- 3. 所有网络模式
         elseif nav_selection == "__all__" then
             keep = true
-
-        -- 4. 具体地表模式 (数字)
         elseif type(nav_selection) == "number" then
             if anchor.surface_index == nav_selection then
-                -- [关键] 在单地表模式下，隐藏主建筑 (aetherlink-obelisk)
                 if anchor.type ~= "aetherlink-obelisk" then
                     keep = true
                 end
@@ -385,40 +388,59 @@ local function update_list_view(frame, player)
         end
     end
 
-    -- 渲染部分 (基本不变，但要注意分组标题的显示逻辑)
     local s_idxs = {}
     for k in pairs(grouped_data) do
         table.insert(s_idxs, k)
     end
     table.sort(s_idxs)
 
+    -- 空数据提示
     if #s_idxs == 0 then
         scroll.add({ type = "label", caption = { "gui.aetherlink-no-anchors" }, style_mods = { font_color = { 0.5, 0.5, 0.5 } } })
         return
     end
 
+    -- 渲染列表
     for _, s_idx in ipairs(s_idxs) do
         local group = grouped_data[s_idx]
-
-        -- 什么时候显示地表标题？
-        -- 答：搜索模式、收藏模式、所有网络模式。
-        -- 只有在“单地表模式”下，才不需要标题。
         local show_header = (type(nav_selection) ~= "number") or is_search_mode
 
-        local table_container = scroll
+        -- [改动 1] 外层容器改用 Frame，样式为 inside_shallow_frame (浅灰色)
+        -- 这就是你想要的"灰色边框向外扩散"的效果
+        local group_frame = scroll.add({ type = "frame", style = "inside_shallow_frame", direction = "vertical" })
+        group_frame.style.horizontally_stretchable = true
+        group_frame.style.bottom_margin = 10
+        -- 稍微调整内边距，让里面的深坑看起来被灰色包围
+        group_frame.style.padding = 6
 
+        -- [改动 2] 标题栏
+        -- 因为外层已经是灰色的了，标题栏不需要额外的 Frame，直接放 Label 即可
         if show_header then
-            local group_frame = scroll.add({ type = "frame", style = "inside_shallow_frame", direction = "vertical" })
-            group_frame.style.horizontally_stretchable = true
-            group_frame.style.bottom_margin = 8
+            local header_flow = group_frame.add({ type = "flow", direction = "horizontal" })
+            header_flow.style.vertical_align = "center"
+            header_flow.style.bottom_margin = 4 -- 标题和列表之间的间距
+            header_flow.style.left_padding = 2
 
-            local header = group_frame.add({ type = "flow", direction = "horizontal" })
-            header.style.vertical_align = "center"
-            header.add({ type = "label", caption = group.name, style = "caption_label" }).style.font = "default-bold"
-            table_container = group_frame
+            -- 这里可以加图标，增加质感
+            -- header_flow.add({type="sprite", sprite="utility/surface_editor_icon"})
+
+            local caption = group.name
+            if group.name == "★ 特别关注" then
+                caption = { "gui.aetherlink-header-favorites" }
+            end
+
+            header_flow.add({ type = "label", caption = caption, style = "caption_label" }).style.font = "default-bold"
+            header_flow.add({ type = "empty-widget", style = "flib_horizontal_pusher" })
         end
 
-        local list_table = table_container.add({
+        -- [改动 3] 内容深坑 (Deep Frame)
+        -- 这个深色框放在浅灰色框内部，形成"被包围"的视觉效果
+        local content_frame = group_frame.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
+        content_frame.style.horizontally_stretchable = true
+        content_frame.style.padding = 0
+
+        -- 列表 Table
+        local list_table = content_frame.add({
             type = "table",
             column_count = 6,
             style = "table",
@@ -461,11 +483,11 @@ function GUI.toggle_main_window(player)
         -- 搜索框逻辑 (保持不变)
         local search_visible = p_data.show_search == true
         titlebar.add({ type = "textfield", name = NAMES.search_textfield, visible = search_visible, style_mods = { width = 100, top_margin = -2 } })
-        titlebar.add({ type = "sprite-button", name = NAMES.search_btn, style = "frame_action_button", sprite = "aetherlink-icon-search", tooltip = "搜索" })
+        titlebar.add({ type = "sprite-button", name = NAMES.search_btn, style = "frame_action_button", sprite = "aetherlink-icon-search", tooltip = { "gui.aetherlink-tooltip-search" } })
 
         -- 固定按钮 (保持不变)
         local pin_style = p_data.is_pinned and "flib_selected_frame_action_button" or "frame_action_button"
-        titlebar.add({ type = "sprite-button", name = NAMES.pin_btn, style = pin_style, sprite = "aetherlink-icon-pin", tooltip = "固定窗口" })
+        titlebar.add({ type = "sprite-button", name = NAMES.pin_btn, style = pin_style, sprite = "aetherlink-icon-pin", tooltip = { "gui.aetherlink-tooltip-pin" } })
         titlebar.add({ type = "sprite-button", name = NAMES.close_btn, style = "frame_action_button", sprite = "utility/close" })
 
         -- ====================================================================
@@ -484,15 +506,21 @@ function GUI.toggle_main_window(player)
         local nav_scroll = nav_frame.add({
             type = "scroll-pane",
             name = NAMES.nav_scroll,
-            style = "flib_naked_scroll_pane",
+            -- [修改] 使用带有条纹背景的原版样式
+            style = "list_box_under_subheader_scroll_pane",
             horizontal_scroll_policy = "never",
             vertical_scroll_policy = "auto",
         })
-        nav_scroll.style.minimal_width = 160
-        nav_scroll.style.maximal_width = 160
-        -- nav_scroll.style.vertically_stretchable = true -- [修复] 纵向拉伸 (去掉 minimal_height)
-        -- [修改] 将最大高度设为 800
+
+        -- [修复 2] 删除 extra_right_padding，防止按钮挤压
+        -- [修复 1] 强制垂直拉伸，确保条纹背景填满整个高度
+        nav_scroll.style.vertically_stretchable = true
+
+        -- [修复 2] 宽度加宽到 220
+        nav_scroll.style.minimal_width = 220
+        nav_scroll.style.maximal_width = 220
         nav_scroll.style.maximal_height = 800
+        nav_scroll.style.minimal_height = 600
 
         -- [栏 2] 中间列表
         local list_frame = body.add({ type = "frame", style = "inside_deep_frame", direction = "vertical" })
@@ -502,13 +530,16 @@ function GUI.toggle_main_window(player)
         local list_scroll = list_frame.add({
             type = "scroll-pane",
             name = NAMES.left_scroll,
-            style = "flib_naked_scroll_pane",
+            -- [修改] 使用带有条纹背景的原版样式
+            style = "list_box_under_subheader_scroll_pane",
             horizontal_scroll_policy = "never",
         })
+
+        -- [修复 2] 删除 extra_right_padding
+        -- [修复 1] 强制垂直拉伸
+        list_scroll.style.vertically_stretchable = true
+
         list_scroll.style.minimal_width = 350
-        -- list_scroll.style.vertically_stretchable = true -- [修复] 纵向拉伸
-        -- list_scroll.style.minimal_height = 400 -- [删除] 这一行
-        -- [修改] 将最大高度设为 800 (如果有 maximal_height = 600 就改掉，没有就加上)
         list_scroll.style.maximal_height = 800
 
         -- [栏 3] 右侧监控
@@ -527,7 +558,6 @@ function GUI.toggle_main_window(player)
         camera.style.minimal_height = 300
         camera.style.vertically_stretchable = true
         camera.style.horizontally_stretchable = true
-        -- [建议新增] 给摄像头也加上最大高度限制，防止它单独把窗口撑得太高
         camera.style.maximal_height = 800
 
         player.opened = frame
@@ -719,7 +749,7 @@ function GUI.handle_click(event)
         return
     end
 
--- GPS 发送
+    -- GPS 发送
     if string.find(name, NAMES.btn_gps) then
         if element.tags.gps_string then
             -- [修复] 使用 game.print()，它对单人和多人游戏都有效，且保证不报错
